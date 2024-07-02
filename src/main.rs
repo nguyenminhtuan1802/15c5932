@@ -2,14 +2,18 @@
 //!
 //! To connect through browser, navigate to "http://localhost:3000" url.
 
-use axum::{routing::{get, post}, Router, extract::Path, Json, http::StatusCode};
+use axum::{
+    routing::{get, post}, Router, extract::Path, Json, http::StatusCode, body::Bytes
+};
 use std::net::SocketAddr;
 use std::collections::HashMap;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use axum::extract::State;
 use axum::response::IntoResponse;
+use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Clone)]
 struct Movie {
     id: String,
     name: String,
@@ -24,7 +28,7 @@ struct DataBase {
 impl DataBase {
     
     fn new() -> Self {
-        let map = HashMap::new();
+        let mut map = HashMap::new();
         Self {
             map,
         }
@@ -39,14 +43,13 @@ async fn main() {
     let app = Router::new()
     .route("/movie/:id", get(get_movie))
     .route("/movie", post(post_movie))
+    //.route("/movie", post(|| async { "POST" }))
     .with_state(db);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    println!("listening on {}", addr);
-    axum_server::bind(addr)
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+    .await
+    .unwrap();
+    axum::serve(listener, app).await.unwrap();
 
 }
 
@@ -56,17 +59,23 @@ async fn get_movie(
 ) -> impl IntoResponse {
     let db = db.lock().unwrap();
     if let Some(movie) = db.map.get(&id) {
-        (StatusCode::OK, Json(movie.clone()))
+        match serde_json::to_string(&movie) {
+            Ok(movie_json) => (StatusCode::OK, movie_json),
+            Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to serialize movie".to_string()),
+        }
+    } else {
+        (StatusCode::NOT_FOUND, "Movie not found".to_string())
     }
 }
 
 async fn post_movie(
-    Json(movie): Json<Movie>,
     State(db): State<Arc<Mutex<DataBase>>>,
-) -> impl IntoResponse {
+    Json(movie): Json<Movie>,
+) -> (StatusCode, Json<Movie>) {
     let mut db = db.lock().unwrap();
+    let movie_clone = movie.clone();
     db.map.insert(movie.id.clone(), movie);
-    (StatusCode::CREATED, Json(json!({ "status": "Movie added" })))
+    (StatusCode::CREATED, Json(movie_clone))
 }
 
 //     // Create Axum server with the following endpoints:
